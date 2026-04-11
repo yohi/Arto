@@ -22,7 +22,7 @@ clean:
 build:
   @rm -rf target/dx/arto/release/macos/Arto.app/Contents/Resources/assets
   @rm -rf target/dx/arto/bundle/macos/bundle/macos/Arto.app/Contents/Resources/assets
-  dx bundle --release --macos
+  dx bundle --release --macos --package-types dmg
 
 [linux]
 build:
