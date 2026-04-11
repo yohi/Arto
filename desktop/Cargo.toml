@@ -16,8 +16,8 @@ clap = { version = "4", features = ["derive"] }
 compile-time = "0.2"
 dirs = "5.0.1"
 interprocess = { version = "2.2", features = ["tokio"] }
-dioxus = { version = "0.7.2", features = [] }
-dioxus-desktop = "0.7.2"
+dioxus = { version = "0.7.5", features = [] }
+dioxus-desktop = "0.7.5"
 dioxus-sdk-window = "0.7.0"
 dotenvy = "0.15.7"
 html-escape = "0.2.13"
