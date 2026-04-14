@@ -122,7 +122,7 @@ jobs:
         with:
           name: arto-${{ runner.os }}
           path: |
-            ./desktop/target/dx/arto/bundle/macos/bundle/dmg
+            ./desktop/target/dx/arto/bundle/macos/macos
           if-no-files-found: error
     timeout-minutes: 30
 
