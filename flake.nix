@@ -55,7 +55,7 @@
           appExecutableName = "arto"; # lowercase executable name
           dxBundlePath =
             if isDarwin then
-              "target/dx/${packageMeta.pname}/bundle/macos/bundle/macos"
+              "target/dx/${packageMeta.pname}/bundle/macos/macos"
             # dx build (not bundle) outputs here; bundle fails in Nix sandbox
             # due to permission errors in the .deb/.AppImage packagers.
             else
