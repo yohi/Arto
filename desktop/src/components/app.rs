@@ -202,12 +202,10 @@ pub fn App(
                     ..
                 },
             ..
-        } => {
-            if *button == MOUSE_BUTTON_LEFT {
-                if let Some(dragged) = drag::get_dragged_tab() {
-                    if dragged.source_window_id == window().id() && drag::is_active_drag() {
-                        handle_drag_mouse_release(state);
-                    }
+        } if *button == MOUSE_BUTTON_LEFT => {
+            if let Some(dragged) = drag::get_dragged_tab() {
+                if dragged.source_window_id == window().id() && drag::is_active_drag() {
+                    handle_drag_mouse_release(state);
                 }
             }
         }
