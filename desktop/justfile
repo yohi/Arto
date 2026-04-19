@@ -21,7 +21,6 @@ clean:
 [macos]
 build:
   @rm -rf target/dx/arto/release/macos/Arto.app/Contents/Resources/assets
-  @rm -rf target/dx/arto/bundle/macos/macos/Arto.app/Contents/Resources/assets
   dx bundle --release --macos --package-types dmg
 
 [linux]
@@ -31,7 +30,7 @@ build:
 
 [macos]
 open:
-  ./target/dx/arto/bundle/macos/macos/Arto.app/Contents/MacOS/arto
+  ./target/dx/arto/release/macos/Arto.app/Contents/MacOS/arto
 
 [linux]
 open:
@@ -41,7 +40,7 @@ open:
 [macos]
 install:
   @rm -rf /Applications/Arto.app
-  @cp -af target/dx/arto/bundle/macos/macos/Arto.app /Applications/.
+  @cp -af target/dx/arto/release/macos/Arto.app /Applications/.
 
 [windows]
 build:
