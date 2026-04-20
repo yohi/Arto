@@ -176,7 +176,7 @@
                 mkdir -p assets/dist
                 cp -r ${renderer-assets}/* assets/dist/
 
-                # Dioxus.toml references "../extras/mac/arto-app.icns" and "../LICENSE"
+                # Dioxus.toml references "../extras/mac/Arto.icns" and "../LICENSE"
                 # Copy them from project root to satisfy relative path requirements
                 cp -r ${./extras} ../extras
                 cp ${./LICENSE} ../LICENSE
