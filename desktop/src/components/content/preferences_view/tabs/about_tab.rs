@@ -3,7 +3,7 @@ use crate::config::Config;
 use crate::utils::file_operations;
 use dioxus::prelude::*;
 
-const ARTO_ICON: Asset = asset!("/assets/arto-app.png");
+const ARTO_ICON: Asset = asset!("/assets/Arto.png");
 
 #[component]
 pub fn AboutTab() -> Element {
