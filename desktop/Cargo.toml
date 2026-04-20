@@ -38,6 +38,7 @@ thiserror = "2.0.9"
 tokio = { version = "1.47.1", features = ["time"] }
 tracing = "0.1.41"
 ureq = "3.1"
+url = "2.5"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
 uuid = { version = "1.0", features = ["v4"] }
 display-info = "0.5.7"
