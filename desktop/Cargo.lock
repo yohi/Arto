@@ -195,6 +195,7 @@ dependencies = [
  "tracing-oslog",
  "tracing-subscriber",
  "ureq",
+ "url",
  "uuid",
 ]
 

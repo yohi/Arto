@@ -1,8 +1,48 @@
 use base64::{engine::general_purpose, Engine as _};
 use lol_html::{element, HtmlRewriter, Settings};
+use std::io::Read;
 use std::path::Path;
 
 use super::headings::HeadingInfo;
+
+/// Maximum byte size of a local image that will be inlined as a data URL.
+///
+/// Prevents accidental misreferences (e.g. log files, device files like `/dev/zero`)
+/// from freezing the UI or exhausting memory during Markdown rendering. Legitimate
+/// screenshots, photos, and diagrams comfortably fit within this limit.
+const MAX_INLINE_IMAGE_SIZE: u64 = 32 * 1024 * 1024;
+
+/// Read a file for inlining, rejecting anything over `max_size` bytes.
+///
+/// Uses `metadata` as a fast path for regular files, then falls back to a bounded
+/// `Read::take` so files whose reported length is unreliable (device files, files
+/// that grow between stat and read) cannot exceed the limit.
+fn read_image_bounded(path: &Path, max_size: u64) -> Option<Vec<u8>> {
+    if let Ok(metadata) = std::fs::metadata(path) {
+        if metadata.len() > max_size {
+            tracing::debug!(
+                ?path,
+                size = metadata.len(),
+                limit = max_size,
+                "Image exceeds inline size limit; skipping"
+            );
+            return None;
+        }
+    }
+
+    let file = std::fs::File::open(path).ok()?;
+    let mut buf = Vec::new();
+    file.take(max_size + 1).read_to_end(&mut buf).ok()?;
+    if buf.len() as u64 > max_size {
+        tracing::debug!(
+            ?path,
+            limit = max_size,
+            "Image exceeded inline size limit during read; skipping"
+        );
+        return None;
+    }
+    Some(buf)
+}
 
 /// Infer MIME type from file extension
 pub(super) fn get_mime_type(path: &Path) -> &'static str {
@@ -42,7 +82,13 @@ pub(super) fn post_process_html_with_headings(
 /// Handles:
 /// - `<table>`: inject `data-source-line` attributes for source mapping
 /// - `<h1>`–`<h6>`: inject `id` attributes for TOC navigation (when `headings` is Some)
-/// - `<img src="…">`: convert relative paths to data URLs with path traversal prevention
+/// - `<img src="…">`: inline local images as data URLs. Supports `file:` URLs
+///   (parsed via `url::Url`, handles percent-encoding and platform differences)
+///   as well as absolute and relative filesystem paths. Relative paths resolve
+///   against `base_dir`. Paths resolving outside `base_dir` are still read and
+///   inlined (logged at `trace` level), matching standard Markdown viewer behavior.
+///   Reads are bounded by `MAX_INLINE_IMAGE_SIZE` to prevent misreferenced huge
+///   files or device files from freezing the UI.
 /// - `<a href="…">`: convert local links to `<span data-md-link="…">` for in-app navigation
 fn post_process_html_impl(
     html_str: &str,
@@ -85,29 +131,76 @@ fn post_process_html_impl(
                     *idx += 1;
                     Ok(())
                 }),
-                // Process img tags: convert relative paths to data URLs
+                // Process img tags: convert local paths to data URLs
                 element!("img[src]", move |el| {
                     if let Some(src) = el.get_attribute("src") {
                         if !src.starts_with("http://")
                             && !src.starts_with("https://")
                             && !src.starts_with("data:")
                         {
-                            let absolute_path = canonical_base.join(&src);
-                            if let Ok(canonical_path) = absolute_path.canonicalize() {
-                                // Path traversal prevention: only allow files within base_dir
-                                if !canonical_path.starts_with(&canonical_base) {
-                                    tracing::warn!(
+                            // Resolve the src to a filesystem path for inlining.
+                            // `file:` URLs (including `file://`, `file://localhost/...`, and
+                            // `file:/...`) are parsed properly (handles percent-encoding and
+                            // platform differences). Other values are treated as plain
+                            // filesystem paths: absolute paths are used as-is, and relative
+                            // paths are joined against the markdown file's directory. After
+                            // canonicalization, paths that resolve outside the base directory
+                            // are still allowed and read; this is logged for debugging but not
+                            // blocked.
+                            let absolute_path = if src.starts_with("file:") {
+                                // Try proper URL parsing first; fall back to stripping the
+                                // scheme and treating the remainder as a plain path for
+                                // slightly-nonconforming inputs (e.g. unencoded spaces).
+                                let parsed = url::Url::parse(&src)
+                                    .ok()
+                                    .and_then(|u| u.to_file_path().ok());
+                                if parsed.is_none() {
+                                    tracing::debug!(
                                         ?src,
-                                        "Image path escapes base directory, skipping"
+                                        "file: URL could not be parsed; falling back to plain path"
                                     );
-                                    return Ok(());
                                 }
-                                if let Ok(image_data) = std::fs::read(&canonical_path) {
-                                    let mime_type = get_mime_type(&canonical_path);
-                                    let base64_data = general_purpose::STANDARD.encode(&image_data);
-                                    let data_url =
-                                        format!("data:{};base64,{}", mime_type, base64_data);
-                                    el.set_attribute("src", &data_url)?;
+                                parsed.or_else(|| {
+                                    // Strip the scheme prefix and use the rest as a path.
+                                    let raw = src
+                                        .strip_prefix("file://")
+                                        .or_else(|| src.strip_prefix("file:/"))
+                                        .or_else(|| src.strip_prefix("file:"))
+                                        .unwrap_or(&src);
+                                    let path = Path::new(raw);
+                                    if path.is_absolute() {
+                                        Some(path.to_path_buf())
+                                    } else {
+                                        Some(canonical_base.join(path))
+                                    }
+                                })
+                            } else {
+                                let path = Path::new(&src);
+                                if path.is_absolute() {
+                                    Some(path.to_path_buf())
+                                } else {
+                                    Some(canonical_base.join(path))
+                                }
+                            };
+
+                            if let Some(absolute_path) = absolute_path {
+                                if let Ok(canonical_path) = absolute_path.canonicalize() {
+                                    if !canonical_path.starts_with(&canonical_base) {
+                                        tracing::trace!(
+                                            ?src,
+                                            "Image path resolved outside base directory; proceeding with inline read"
+                                        );
+                                    }
+                                    if let Some(image_data) =
+                                        read_image_bounded(&canonical_path, MAX_INLINE_IMAGE_SIZE)
+                                    {
+                                        let mime_type = get_mime_type(&canonical_path);
+                                        let base64_data =
+                                            general_purpose::STANDARD.encode(&image_data);
+                                        let data_url =
+                                            format!("data:{};base64,{}", mime_type, base64_data);
+                                        el.set_attribute("src", &data_url)?;
+                                    }
                                 }
                             }
                         }
@@ -158,34 +251,31 @@ mod tests {
 
     // ========================================================================
     // Security regression tests
-    // These verify the current hardened behavior (e.g. path traversal blocked,
-    // no unsafe interpolation) and guard against security regressions.
+    // These verify the current behavior (e.g. no unsafe interpolation)
+    // and guard against security regressions.
     // If behavior is intentionally changed, update both the code and these tests.
     // ========================================================================
 
-    /// Path traversal images must NOT be converted to data URLs.
-    /// The base_dir boundary check prevents reading files outside base_dir.
+    /// Relative paths that traverse up the directory tree (e.g. `../`) are resolved
+    /// relative to the markdown file's directory, matching standard Markdown viewer behavior.
     #[test]
-    fn test_path_traversal_img_src_blocked() {
+    fn test_relative_path_traversal_img_src_resolved() {
         let temp = TempDir::new().unwrap();
         let sub = temp.path().join("sub");
         fs::create_dir(&sub).unwrap();
-        // Create secret.png OUTSIDE base_dir (sub/)
-        let secret = temp.path().join("secret.png");
-        fs::write(&secret, [0x89, 0x50, 0x4E, 0x47]).unwrap();
+        // Create image.png OUTSIDE base_dir (sub/), in a sibling directory
+        let images_dir = temp.path().join("images");
+        fs::create_dir(&images_dir).unwrap();
+        let image = images_dir.join("image.png");
+        fs::write(&image, [0x89, 0x50, 0x4E, 0x47]).unwrap();
 
-        let html = r#"<img src="../secret.png">"#;
+        let html = r#"<img src="../images/image.png">"#;
         let result = post_process_html_tags(html, &sub, &[]);
 
-        // Path traversal should be blocked: image NOT converted to data URL
+        // Relative path traversal should be resolved and image converted to data URL
         assert!(
-            !result.contains("data:image/png;base64,"),
-            "Path-traversal images must not be converted to data URLs: {result}"
-        );
-        // Original src should remain unchanged
-        assert!(
-            result.contains(r#"src="../secret.png""#),
-            "Original src attribute should be preserved: {result}"
+            result.contains("data:image/png;base64,"),
+            "Relative path traversal images should be converted to data URLs: {result}"
         );
     }
 
@@ -450,6 +540,83 @@ mod tests {
         assert!(
             result.contains("Title"),
             "Should still render heading text: {result}"
+        );
+    }
+
+    /// file:// URLs should be resolved to the local file and converted to data URLs.
+    /// Tests the canonical `file:///absolute/path` form and `file://localhost/...` form.
+    #[test]
+    fn test_file_scheme_url_resolved() {
+        let temp_dir = TempDir::new().unwrap();
+        let image_path = temp_dir.path().canonicalize().unwrap().join("image.png");
+        fs::write(&image_path, [0x89, 0x50, 0x4E, 0x47]).unwrap();
+
+        // Use the url crate's from_file_path to build a correct, platform-appropriate
+        // file URL (e.g., `file:///abs/path` on Unix, `file:///C:/abs/path` on Windows).
+        let file_url = url::Url::from_file_path(&image_path)
+            .expect("valid file path")
+            .to_string();
+        let html = format!(r#"<img src="{}">"#, file_url);
+        let result = post_process_html_tags(&html, temp_dir.path(), &[]);
+        assert!(
+            result.contains("data:image/png;base64,"),
+            "file:///... URL should be converted to data URL: {result}"
+        );
+
+        // file://localhost/absolute/path form: replace the empty host with "localhost"
+        let localhost_url = file_url.replacen("file:///", "file://localhost/", 1);
+        let html2 = format!(r#"<img src="{}">"#, localhost_url);
+        let result2 = post_process_html_tags(&html2, temp_dir.path(), &[]);
+        assert!(
+            result2.contains("data:image/png;base64,"),
+            "file://localhost/... URL should be converted to data URL: {result2}"
+        );
+    }
+
+    /// `read_image_bounded` must reject files larger than the configured limit,
+    /// both via the metadata fast path and via the bounded-read fallback.
+    #[test]
+    fn test_read_image_bounded_rejects_oversized() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("big.png");
+        // 2 KiB file; limit 1 KiB.
+        fs::write(&path, vec![0u8; 2048]).unwrap();
+
+        assert!(
+            read_image_bounded(&path, 1024).is_none(),
+            "file larger than limit must be rejected"
+        );
+    }
+
+    /// `read_image_bounded` must accept files at or below the limit.
+    #[test]
+    fn test_read_image_bounded_accepts_within_limit() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("ok.png");
+        fs::write(&path, vec![0u8; 1024]).unwrap();
+
+        let data = read_image_bounded(&path, 1024).expect("exactly-limit file must be accepted");
+        assert_eq!(data.len(), 1024);
+    }
+
+    /// A `./../` style relative path should be resolved correctly
+    #[test]
+    fn test_dot_slash_relative_path_resolved() {
+        let temp = TempDir::new().unwrap();
+        let docs = temp.path().join("docs");
+        fs::create_dir(&docs).unwrap();
+        let images = temp.path().join("images");
+        fs::create_dir(&images).unwrap();
+        let image = images.join("diagram.png");
+        fs::write(&image, [0x89, 0x50, 0x4E, 0x47]).unwrap();
+
+        // ./../images/diagram.png resolves from docs/ to images/
+        let html = r#"<img src="./../images/diagram.png">"#;
+        let result = post_process_html_tags(html, &docs, &[]);
+
+        assert!(
+            result.contains("data:image/png;base64,"),
+            "./../ relative path should be converted to data URL: {result}"
         );
     }
 }
