@@ -147,7 +147,10 @@ jobs:
           VERSION=$(git describe --tags --always)
           echo "${VERSION#v}" > desktop/VERSION
       - run: nix build
-    timeout-minutes: 30
+    # A cold cache (e.g. after a source-hash bump invalidates `arto-deps`)
+    # makes the full dependency + crate build exceed 30m on the ubuntu runner,
+    # and macOS already finishes within ~2m of the old limit. Give real headroom.
+    timeout-minutes: 60
 
   release:
     if: ${{ github.event_name == 'release' }}
