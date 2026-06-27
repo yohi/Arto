@@ -64,6 +64,12 @@ fn flip_y<T: DisplayLike>(y: i32, display: &T) -> i32 {
 /// - `None` - If no displays are available or scale factor is invalid
 pub fn get_current_display_bounds() -> Option<(LogicalPosition<i32>, LogicalSize<u32>)> {
     let display = get_cursor_display().or_else(get_primary_display)?;
+    display_info_logical_bounds(&display)
+}
+
+pub fn display_info_logical_bounds(
+    display: &DisplayInfo,
+) -> Option<(LogicalPosition<i32>, LogicalSize<u32>)> {
     let scale = display.scale_factor as f64;
     if scale <= 0.0 {
         return None;
@@ -120,6 +126,13 @@ pub fn get_cursor_display() -> Option<DisplayInfo> {
         .or_else(|| displays.first().cloned())
 }
 
+#[cfg(target_os = "macos")]
+fn to_logical_size_from_parts(width: u32, height: u32, _scale: f64) -> LogicalSize<u32> {
+    // display-info uses CGDisplayBounds on macOS, which is already in points.
+    LogicalSize::new(width.max(1), height.max(1))
+}
+
+#[cfg(not(target_os = "macos"))]
 fn to_logical_size_from_parts(width: u32, height: u32, scale: f64) -> LogicalSize<u32> {
     // Use safe minimum scale factor to prevent division by zero
     let safe_scale = if scale <= 0.0 { 1.0 } else { scale };
@@ -128,6 +141,13 @@ fn to_logical_size_from_parts(width: u32, height: u32, scale: f64) -> LogicalSiz
     LogicalSize::new(width, height)
 }
 
+#[cfg(target_os = "macos")]
+fn to_logical_position_from_parts(x: i32, y: i32, _scale: f64) -> LogicalPosition<i32> {
+    // display-info uses CGDisplayBounds on macOS, which is already in points.
+    LogicalPosition::new(x, y)
+}
+
+#[cfg(not(target_os = "macos"))]
 fn to_logical_position_from_parts(x: i32, y: i32, scale: f64) -> LogicalPosition<i32> {
     // Use safe minimum scale factor to prevent division by zero
     let safe_scale = if scale <= 0.0 { 1.0 } else { scale };
@@ -237,11 +257,20 @@ mod tests {
         assert_eq!(flip_y(15, &display), 115);
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn test_to_logical_size_from_parts_scales() {
         let size = to_logical_size_from_parts(100, 50, 2.0);
         assert_eq!(size.width, 50);
         assert_eq!(size.height, 25);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_to_logical_size_from_parts_macos_uses_display_bounds() {
+        let size = to_logical_size_from_parts(100, 50, 2.0);
+        assert_eq!(size.width, 100);
+        assert_eq!(size.height, 50);
     }
 
     #[test]
@@ -251,10 +280,19 @@ mod tests {
         assert_eq!(size.height, 1);
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn test_to_logical_position_from_parts_scales() {
         let position = to_logical_position_from_parts(-40, 20, 2.0);
         assert_eq!(position.x, -20);
         assert_eq!(position.y, 10);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_to_logical_position_from_parts_macos_uses_display_bounds() {
+        let position = to_logical_position_from_parts(-40, 20, 2.0);
+        assert_eq!(position.x, -40);
+        assert_eq!(position.y, 20);
     }
 }

@@ -29,6 +29,8 @@ const MAX_POSITION_SHIFT_ATTEMPTS: usize = 20;
 /// Create base window config from parameters
 /// This config can be further customized with .with_menu(), .with_custom_event_handler(), etc.
 pub fn create_main_window_config(params: &CreateMainWindowConfigParams) -> Config {
+    let initial_size = params.size;
+
     Config::new()
         .with_window(
             WindowBuilder::new()
@@ -36,6 +38,11 @@ pub fn create_main_window_config(params: &CreateMainWindowConfigParams) -> Confi
                 .with_position(params.position)
                 .with_inner_size(params.size),
         )
+        // Dioxus/tao can lose the requested inner height on macOS during window
+        // construction, so apply the same size once the native window exists.
+        .with_on_window(move |window, _| {
+            window.set_inner_size(initial_size);
+        })
         // Add main style in config. Otherwise the style takes time to load and
         // the window appears unstyled for a brief moment.
         .with_custom_head(indoc::formatdoc! {r#"<link rel="stylesheet" href="{MAIN_STYLE}">"#})
