@@ -10,7 +10,10 @@ use crate::config::{
 };
 use crate::state::{PersistedState, Position, Size};
 use crate::theme::Theme;
-use crate::utils::screen::{get_current_display_bounds, get_cursor_display, get_primary_display};
+use crate::utils::screen::{
+    display_info_logical_bounds, get_current_display_bounds, get_cursor_display,
+    get_primary_display,
+};
 use crate::window::main::get_last_focused_window_state;
 
 const MIN_WINDOW_DIMENSION: f64 = 100.0;
@@ -152,14 +155,11 @@ fn resolve_window_position_from_cursor(
         Mouse::Error => return None,
     };
     let display = get_cursor_display().or_else(get_primary_display)?;
-    let scale = display.scale_factor as f64;
-    if scale <= 0.0 {
-        return None;
-    }
-    let display_x = display.x as f64 / scale;
-    let display_y = display.y as f64 / scale;
-    let display_width = display.width as f64 / scale;
-    let display_height = display.height as f64 / scale;
+    let (display_origin, display_size) = display_info_logical_bounds(&display)?;
+    let display_x = display_origin.x as f64;
+    let display_y = display_origin.y as f64;
+    let display_width = display_size.width as f64;
+    let display_height = display_size.height as f64;
     let (cursor_x, cursor_y) = (x, y);
     let window_width = window_size.width as f64;
     let window_height = window_size.height as f64;
