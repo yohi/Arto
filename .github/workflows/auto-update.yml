@@ -2,58 +2,53 @@ name: "Auto-check upstream release and build cache"
 
 on:
   schedule:
-    # 毎日日本時間午前 9:00（UTC 0:00）に実行
     - cron: '0 0 * * *'
-  workflow_dispatch: # 手動で即座に実行したい場合用
+  workflow_dispatch:
+
+# git pushするために書き込み権限を明示的に指定します
+permissions:
+  contents: write
 
 jobs:
   check-and-build:
     runs-on: ubuntu-latest
     steps:
-    # 1. 自身のフォークリポジトリをチェックアウト
     - name: Checkout Fork
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0 # すべての履歴・タグを取得
+        fetch-depth: 0
 
-    # 2. フォーク元の最新タグをGitHub APIから取得
     - name: Get latest release tag from upstream
       id: get-tag
       run: |
-        # upstream (arto-app/Arto) の最新リリースを取得
         UPSTREAM_TAG=$(curl -fsSL https://api.github.com/repos/arto-app/Arto/releases/latest | jq -r .tag_name)
-
-        # もし公式がリリース(Releases)を作っておらずタグのみ管理している場合はこちらを使用:
         if [ "$UPSTREAM_TAG" = "null" ] || [ -z "$UPSTREAM_TAG" ]; then
           UPSTREAM_TAG=$(curl -fsSL https://api.github.com/repos/arto-app/Arto/tags | jq -r '.[0].name')
         fi
-
         echo "Latest upstream tag: $UPSTREAM_TAG"
         echo "tag=$UPSTREAM_TAG" >> $GITHUB_OUTPUT
 
-    # 3. フォーク元の最新コードを取得してチェックアウト
     - name: Fetch upstream and checkout tag
       run: |
         git remote add upstream https://github.com/arto-app/Arto.git
         git fetch upstream --tags
-
-        # 上流の最新タグにチェックアウト
         git checkout ${{ steps.get-tag.outputs.tag }}
 
-    # 4. Nix のインストール
+    # 取得したタグを自身のフォーク(yohi/Arto)にもプッシュする
+    - name: Push tag to fork
+      run: |
+        git push origin ${{ steps.get-tag.outputs.tag }} || echo "Tag already exists on fork"
+
     - name: Install Nix
       uses: cachix/install-nix-action@v25
       with:
         nix_path: nixpkgs=channel:nixos-unstable
 
-    # 5. Cachix の設定
     - name: Setup Cachix
       uses: cachix/cachix-action@v14
       with:
-        # ご自身のキャッシュ名
         name: yohi-arto
         authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
 
-    # 6. ビルドの実行（キャッシュがあれば一瞬で終了、無ければビルド・キャッシュプッシュされる）
     - name: Build Nix Package
       run: nix build .#default
